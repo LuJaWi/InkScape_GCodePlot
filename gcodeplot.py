@@ -24,6 +24,28 @@ ALIGN_RIGHT = ALIGN_TOP
 ALIGN_CENTER = 3
 
 class Plotter(object):
+    """
+    Primary class for defining a plotter's capabilities and settings.
+
+    Attributes:
+        xyMin,xyMax: the minimum and maximum x and y coordinates of the plotter's drawing area
+        drawSpeed: the speed at which the plotter should draw (in millimeters per second)
+        moveSpeed: the speed at which the plotter should move the pen (in millimeters per second)
+        workZ: the z-position for drawing (in millimeters)
+        liftDeltaZ: the amount to lift for pen-up (in millimeters)
+        safeDeltaZ: the amount to lift for pen-up when moving to a new location (in millimeters)
+        zSpeed: the speed for up/down movement (in millimeters per second)
+        liftCommand: gcode lift command (separate lines with |)
+        downCommand: gcode down command (separate lines with |)
+        initCode: gcode init commands (separate lines with |)
+        endCode: gcode end commands (separate lines with |)
+        comment: the comment character to use in the gcode output
+
+    Methods:
+        inRange(point): Determine if a point is within the plotter's drawing area.
+        updateVariables(): Updates the instance variables and formulas used for G-code plotting.
+
+    """
     def __init__(self, xyMin=(7,8), xyMax=(204,178),
             drawSpeed=35, moveSpeed=40, zSpeed=5, workZ = 14.5, liftDeltaZ = 2.5, safeDeltaZ = 20,
             liftCommand=None, safeLiftCommand=None, downCommand=None, comment=";",
@@ -53,7 +75,10 @@ class Plotter(object):
         self.endCode = endCode
         self.comment = comment
 
-    def inRange(self, point):
+    def inRange(self, point) -> bool:
+        """
+        Determine if a point is within the plotter's drawing area.
+        """
         for i in range(2):
             if point[i] < self.xyMin[i]-.001 or point[i] > self.xyMax[i]+.001:
                 return False
@@ -68,11 +93,41 @@ class Plotter(object):
         return self.workZ + self.liftDeltaZ
         
     def updateVariables(self):
+        """
+        Updates the instance variables and formulas used for G-code plotting.
+
+        This method sets the `variables` dictionary with the following keys:
+            - 'lift': The lift delta Z value.
+            - 'work': The work Z value.
+            - 'safe': The safe delta Z value.
+            - 'left': The minimum X coordinate.
+            - 'bottom': The minimum Y coordinate.
+            - 'zspeed': The Z-axis speed.
+            - 'movespeed': The movement speed.
+
+        It also sets the `formulas` dictionary with the following keys:
+            - 'right': The maximum X coordinate as a string.
+            - 'top': The maximum Y coordinate as a string.
+            - 'up': The formula for the up position (work + lift).
+            - 'park': The formula for the park position (work + safe).
+            - 'centerx': The formula for the center X coordinate ((left + right) / 2).
+            - 'centery': The formula for the center Y coordinate ((top + bottom) / 2).
+        """
         self.variables = {'lift':self.liftDeltaZ, 'work':self.workZ, 'safe':self.safeDeltaZ, 'left':self.xyMin[0],
             'bottom':self.xyMin[1], 'zspeed':self.zSpeed, 'movespeed':self.moveSpeed}
         self.formulas = {'right':str(self.xyMax[0]), 'top':str(self.xyMax[1]), 'up':'work+lift', 'park':'work+safe', 'centerx':'(left+right)/2.', 'centery':'(top+bottom)/2.'}
 
-def processCode(code):
+def processCode(code) -> list:
+    """
+    Processes the given code string by evaluating expressions within double curly braces
+    and formatting the string accordingly.
+    Args:
+        code (str): The input code string containing expressions within double curly braces
+                    and possibly pipe characters for newlines.
+    Returns:
+        list: A list containing the formatted string with evaluated expressions.
+              If the input code is empty, returns an empty list.
+    """
     if not code:
         return []
 
@@ -86,15 +141,49 @@ def processCode(code):
     
     return [formatString % data]
         
-def gcodeHeader(plotter):
+def gcodeHeader(plotter) -> str:
+    """
+    Generates the G-code header for the given plotter.
+
+    Args:
+        plotter (object): An instance of the plotter class containing initialization code.
+
+    Returns:
+        str: The processed G-code header.
+    """
     return processCode(plotter.initCode)
 
-def isSameColor(rgb1, rgb2):
+def isSameColor(rgb1, rgb2, tolerance=0.001) -> bool:
+    """
+    Determines if two RGB color values are the same within a small tolerance.
+
+    Args:
+        rgb1 (tuple or None): The first RGB color value as a tuple of three floats (R, G, B) or None.
+        rgb2 (tuple or None): The second RGB color value as a tuple of three floats (R, G, B) or None.
+
+    Returns:
+        bool: True if the colors are the same or both are None, False otherwise.
+    """
     if rgb1 is None or rgb2 is None:
         return rgb1 is rgb2
-    return max(abs(rgb1[i]-rgb2[i]) for i in range(3)) < 0.001
+    return max(abs(rgb1[i]-rgb2[i]) for i in range(3)) < tolerance
 
 class Pen(object):
+    """
+    A class to represent a Pen with specific attributes parsed from a text description.
+
+    Attributes:
+        description : str
+            The cleaned and standardized text description of the pen.
+        pen : int
+            The pen number parsed from the text description.
+        offset : tuple
+            A tuple of floats representing the offset coordinates parsed from the text description.
+        color : tuple
+            A tuple representing the RGB color parsed from the text description.
+        name : str
+            The name of the pen parsed from the text description.
+    """
     def __init__(self, text):
         text = re.sub(r'\s+', r' ', text.strip())
         self.description = text
@@ -109,6 +198,26 @@ class Pen(object):
         self.name = data[3]
 
 class Scale(object):
+    """
+    A class to handle scaling and offsetting of points for plotting.
+
+    Attributes:
+        scale (tuple): A tuple representing the scaling factors for x and y coordinates.
+        offset (tuple): A tuple representing the offset values for x and y coordinates.
+
+    Methods:
+        clone():
+            Returns a clone of the current Scale object.
+        
+        fit(plotter, xyMin, xyMax):
+            Fits the scale to the given plotter and coordinate bounds.
+        
+        align(plotter, xyMin, xyMax, align):
+            Aligns the scale and offset based on the given alignment parameters.
+        
+        scalePoint(point):
+            Scales and offsets a given point based on the current scale and offset values.
+    """
     def __init__(self, scale=(1.,1.), offset=(0.,0.)):
         self.offset = offset
         self.scale = scale
@@ -149,7 +258,17 @@ class Scale(object):
     def scalePoint(self, point):
         return (point[0]*self.scale[0]+self.offset[0], point[1]*self.scale[1]+self.offset[1])
 
-def comparison(a,b):
+def comparison(a, b) -> int:
+    """
+    Compare two values and return an integer based on their comparison.
+
+    Args:
+        a: The first value to compare.
+        b: The second value to compare.
+
+    Returns:
+        int: 1 if a > b, -1 if a < b, 0 if a == b.
+        """
     return 1 if a>b else (-1 if a<b else 0)
 
 def safeSorted(data,comparison=comparison):
